@@ -1,0 +1,7 @@
+[submodule "spv8-public"]
+	path = spv8-public
+	url = git@github.com:reikdas/spv8-public.git
+	branch = reikdas/c
+[submodule "buildit"]
+	path = buildit
+	url = git@github.com:BuildIt-lang/buildit.git
