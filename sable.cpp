@@ -104,21 +104,26 @@ int main(int argc, char** argv) {
     int n_cols = data.cpntr.back();
     int nnz = data.csr_val.size();
     
-    // Validate array sizes
-    if (data.indptr.size() < (size_t)(n_rows + 1)) {
-        fprintf(stderr, "Error: indptr size (%zu) is less than required (n_rows + 1 = %d)\n", 
-                data.indptr.size(), n_rows + 1);
-        return 1;
-    }
-    if (data.indices.size() < (size_t)nnz) {
-        fprintf(stderr, "Error: indices size (%zu) is less than nnz (%d)\n", 
-                data.indices.size(), nnz);
-        return 1;
-    }
-    if (data.csr_val.size() < (size_t)nnz) {
-        fprintf(stderr, "Error: csr_val size (%zu) is less than nnz (%d)\n", 
-                data.csr_val.size(), nnz);
-        return 1;
+    // Check if we have sparse elements (CSR data)
+    bool has_sparse = !data.csr_val.empty() && !data.indptr.empty() && !data.indices.empty();
+    
+    // Validate array sizes only if we have sparse elements
+    if (has_sparse) {
+        if (data.indptr.size() < (size_t)(n_rows + 1)) {
+            fprintf(stderr, "Error: indptr size (%zu) is less than required (n_rows + 1 = %d)\n", 
+                    data.indptr.size(), n_rows + 1);
+            return 1;
+        }
+        if (data.indices.size() < (size_t)nnz) {
+            fprintf(stderr, "Error: indices size (%zu) is less than nnz (%d)\n", 
+                    data.indices.size(), nnz);
+            return 1;
+        }
+        if (data.csr_val.size() < (size_t)nnz) {
+            fprintf(stderr, "Error: csr_val size (%zu) is less than nnz (%d)\n", 
+                    data.csr_val.size(), nnz);
+            return 1;
+        }
     }
     
     printf("Matrix: %d x %d, NNZ: %d, Dense blocks: %zu\n", n_rows, n_cols, nnz, dense_blocks.size());
@@ -148,61 +153,71 @@ int main(int argc, char** argv) {
     for (int i = 0; i < n_cols && fscanf(vec_file, "%lf,", &x[i]) == 1; i++);
     fclose(vec_file);
     
-    // Set up CSR matrix using the new input_matrix function
-    struct csr_matrix csr_mat = input_matrix(
-        nnz, n_rows, n_cols,
-        data.csr_val.data(),
-        data.indices.data(),
-        data.indptr.data()
-    );
+    // Set up CSR matrix only if we have sparse elements
+    struct csr_matrix csr_mat = {0};
+    struct tr_matrix tr = {0};
     
-    // Validate matrix before processing
-    if (!csr_mat.nnz || !csr_mat.col || !csr_mat.rowb || !csr_mat.rowe) {
-        fprintf(stderr, "Error: Failed to allocate CSR matrix\n");
-        destroy_matrix(&csr_mat);
-        free(y);
-        free(x);
-        free(val);
-        return 1;
+    if (has_sparse) {
+        csr_mat = input_matrix(
+            nnz, n_rows, n_cols,
+            data.csr_val.data(),
+            data.indices.data(),
+            data.indptr.data()
+        );
+        
+        // Validate matrix before processing
+        if (!csr_mat.nnz || !csr_mat.col || !csr_mat.rowb || !csr_mat.rowe) {
+            fprintf(stderr, "Error: Failed to allocate CSR matrix\n");
+            destroy_matrix(&csr_mat);
+            free(y);
+            free(x);
+            free(val);
+            return 1;
+        }
+        
+        // Validate matrix dimensions
+        if (csr_mat.rows <= 0 || csr_mat.cols <= 0 || csr_mat.m <= 0) {
+            fprintf(stderr, "Error: Invalid matrix dimensions: rows=%d, cols=%d, m=%d\n", 
+                    csr_mat.rows, csr_mat.cols, csr_mat.m);
+            destroy_matrix(&csr_mat);
+            free(y);
+            free(x);
+            free(val);
+            return 1;
+        }
+        
+        // Process matrix for spv8 kernel (process() now determines panel_count internally)
+        tr = process(&csr_mat);
     }
     
-    // Validate matrix dimensions
-    if (csr_mat.rows <= 0 || csr_mat.cols <= 0 || csr_mat.m <= 0) {
-        fprintf(stderr, "Error: Invalid matrix dimensions: rows=%d, cols=%d, m=%d\n", 
-                csr_mat.rows, csr_mat.cols, csr_mat.m);
-        destroy_matrix(&csr_mat);
-        free(y);
-        free(x);
-        free(val);
-        return 1;
-    }
-    
-    // Process matrix for spv8 kernel (process() now determines panel_count internally)
-    struct tr_matrix tr = process(&csr_mat);
-    
-    // Stage 2: Compile specialized function for each dense block
-    printf("Compiling specialized kernels...\n");
+    // Stage 2: Compile specialized function for each dense block (only if there are dense blocks)
     std::vector<spmv_func_t> block_functions;
-    for (size_t i = 0; i < dense_blocks.size(); i++) {
-        block_functions.push_back(compile_single_block_spmv(dense_blocks[i], i));
+    if (!dense_blocks.empty()) {
+        printf("Compiling specialized kernels...\n");
+        for (size_t i = 0; i < dense_blocks.size(); i++) {
+            block_functions.push_back(compile_single_block_spmv(dense_blocks[i], i));
+        }
     }
     
     // Benchmark
     long* sparse_times = (long*)malloc(bench * sizeof(long));
-    long (*dense_block_times)[bench] = (long(*)[bench])malloc(dense_blocks.size() * bench * sizeof(long));
+    size_t dense_times_size = dense_blocks.empty() ? 1 : dense_blocks.size();  // Avoid 0-size malloc
+    long (*dense_block_times)[bench] = (long(*)[bench])malloc(dense_times_size * bench * sizeof(long));
     if (!sparse_times || !dense_block_times) {
         fprintf(stderr, "Error: Failed to allocate memory for timing arrays\n");
         // Cleanup
         if (sparse_times) free(sparse_times);
         if (dense_block_times) free(dense_block_times);
-        destroy_matrix(&csr_mat);
-        for (int t = 0; t < tr.task_count; t++) {
-            free(tr.tasks[t]);
+        if (has_sparse) {
+            destroy_matrix(&csr_mat);
+            for (int t = 0; t < tr.task_count; t++) {
+                free(tr.tasks[t]);
+            }
+            free(tr.tasks);
+            free(tr.task_sizes);
+            free(tr.spvv8_len);
+            destroy_matrix(&tr.mat);
         }
-        free(tr.tasks);
-        free(tr.task_sizes);
-        free(tr.spvv8_len);
-        destroy_matrix(&tr.mat);
         free(y);
         free(x);
         free(val);
@@ -225,20 +240,24 @@ int main(int argc, char** argv) {
     for (int i = 0; i < bench; i++) {
         memset(y, 0, n_rows * sizeof(double));
         
-        // Sparse computation - note: spmv_tr_spvv8_kernel now takes x and y as parameters
-        clock_gettime(CLOCK_MONOTONIC, &t1);
-        spmv_tr_spvv8_kernel(&tr, x, y);
-        clock_gettime(CLOCK_MONOTONIC, &t2);
-        sparse_times[i] = (t2.tv_sec - t1.tv_sec) * 1000000000L + 
-                          (t2.tv_nsec - t1.tv_nsec);
-        
-        // Dense computation - time each block individually
-        for (size_t j = 0; j < dense_blocks.size(); j++) {
+        // Sparse computation - only if we have sparse elements
+        if (has_sparse) {
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            block_functions[j](y, x, val);
+            spmv_tr_spvv8_kernel(&tr, x, y);
             clock_gettime(CLOCK_MONOTONIC, &t2);
-            dense_block_times[j][i] = (t2.tv_sec - t1.tv_sec) * 1000000000L + 
-                                      (t2.tv_nsec - t1.tv_nsec);
+            sparse_times[i] = (t2.tv_sec - t1.tv_sec) * 1000000000L + 
+                              (t2.tv_nsec - t1.tv_nsec);
+        }
+        
+        // Dense computation - time each block individually (only if there are dense blocks)
+        if (!dense_blocks.empty()) {
+            for (size_t j = 0; j < dense_blocks.size(); j++) {
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                block_functions[j](y, x, val);
+                clock_gettime(CLOCK_MONOTONIC, &t2);
+                dense_block_times[j][i] = (t2.tv_sec - t1.tv_sec) * 1000000000L + 
+                                          (t2.tv_nsec - t1.tv_nsec);
+            }
         }
     }
     
@@ -276,15 +295,17 @@ int main(int argc, char** argv) {
     }
     
     // Cleanup
-    destroy_matrix(&csr_mat);
-    // Free tr_matrix
-    destroy_matrix(&tr.mat);
-    for (int t = 0; t < tr.task_count; t++) {
-        free(tr.tasks[t]);
+    if (has_sparse) {
+        destroy_matrix(&csr_mat);
+        // Free tr_matrix
+        destroy_matrix(&tr.mat);
+        for (int t = 0; t < tr.task_count; t++) {
+            free(tr.tasks[t]);
+        }
+        free(tr.tasks);
+        free(tr.task_sizes);
+        free(tr.spvv8_len);
     }
-    free(tr.tasks);
-    free(tr.task_sizes);
-    free(tr.spvv8_len);
     free(sparse_times);
     free(dense_block_times);
     free(y);

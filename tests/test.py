@@ -22,10 +22,6 @@ import shutil
 TEST_DIR = pathlib.Path(__file__).parent.absolute()
 PROJECT_ROOT = TEST_DIR.parent
 
-# Paths to test files
-MTX_FILE = TEST_DIR / "heart1.mtx"
-VBRC_FILE = TEST_DIR / "heart1.vbrc"
-VECTOR_FILE = TEST_DIR / "generated_vector_3557.vector"
 SABLE_BINARY = TEST_DIR / "sable"
 
 
@@ -219,6 +215,20 @@ def compare_results(scipy_result, sable_result, rtol=1e-5, atol=1e-8):
     )
 
 
+def test_sable_vs_scipy_example(sable_binary):
+    """Test that sable.cpp produces the same results as scipy for example."""
+    mtx_file = TEST_DIR / "example-canon.mtx"
+    vbrc_file = TEST_DIR / "example.vbrc"
+    vector_file = TEST_DIR / "generated_vector_11.vector"
+    
+    # Compute results
+    scipy_result = compute_scipy_result(mtx_file, vector_file)
+    sable_result = compute_sable_result(sable_binary, vbrc_file, vector_file)
+    
+    # Compare results
+    compare_results(scipy_result, sable_result)
+
+
 def test_sable_vs_scipy_example2(sable_binary):
     """Test that sable.cpp produces the same results as scipy for example2."""
     mtx_file = TEST_DIR / "example-canon2.mtx"
@@ -231,5 +241,3 @@ def test_sable_vs_scipy_example2(sable_binary):
     
     # Compare results
     compare_results(scipy_result, sable_result)
-
-
