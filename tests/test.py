@@ -2,11 +2,6 @@
 """
 Test script to verify that sable.cpp produces the same results as scipy
 for matrix-vector multiplication.
-
-This script:
-1. Uses scipy to read heart1.mtx and compute product with generated_vector_3557.vector
-2. Uses sable.cpp (compiled binary) to read heart1.vbrc and generated_vector_3557.vector
-3. Compares the results to ensure they match
 """
 
 import os
@@ -28,15 +23,17 @@ PROJECT_ROOT = TEST_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from convert_to_vbrc import convert_yaml_to_vbrc
 
-SABLE_BINARY = TEST_DIR / "sable"
+SABLE_SPV8_BINARY = TEST_DIR / "sable-spv8"
+SABLE_MKL_BINARY = TEST_DIR / "sable-mkl"
 
 
 def build_sable():
-    """Build the sable binary in the tests directory.
+    """Build the sable-spv8 and sable-mkl binaries in the tests directory.
     
     Note: CMakeLists.txt handles building buildit and spv8-public dependencies.
+    MKL binary is skipped in GitHub Actions where MKL is not available.
     """
-    print("Building sable binary...")
+    print("Building sable binaries...")
     
     # Create build directory for cmake
     build_dir = PROJECT_ROOT / "build"
@@ -55,33 +52,67 @@ def build_sable():
         if result.returncode != 0:
             raise RuntimeError(f"Error configuring CMake: {result.stderr}")
     
-    # Build sable (CMake will handle buildit and spv8-public dependencies)
-    print("Compiling sable...")
+    # Check if we're in GitHub Actions (skip MKL build if so)
+    is_github_actions = os.environ.get("GITHUB_ACTIONS") == "true"
+    
+    # Build sable-spv8 (always) and sable-mkl (only if not in GitHub Actions)
+    targets = ["sable-spv8"]
+    if not is_github_actions:
+        targets.append("sable-mkl")
+    
+    print(f"Compiling {' and '.join(targets)}...")
     result = subprocess.run(
-        ["make", "-j", str(os.cpu_count() or 1), "sable"],
+        ["make", "-j", str(os.cpu_count() or 1)] + targets,
         cwd=build_dir,
         capture_output=True,
         text=True
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Error building sable: {result.stderr}")
+        raise RuntimeError(f"Error building sable binaries: {result.stderr}")
     
-    # Copy binary to tests directory
-    source_binary = build_dir / "sable"
-    if source_binary.exists():
-        shutil.copy2(source_binary, SABLE_BINARY)
-        os.chmod(SABLE_BINARY, 0o755)
-        print(f"Binary copied to {SABLE_BINARY}")
+    # Copy binaries to tests directory
+    source_spv8_binary = build_dir / "sable-spv8"
+    
+    if source_spv8_binary.exists():
+        shutil.copy2(source_spv8_binary, SABLE_SPV8_BINARY)
+        os.chmod(SABLE_SPV8_BINARY, 0o755)
+        print(f"Binary copied to {SABLE_SPV8_BINARY}")
     else:
-        raise RuntimeError(f"Error: Binary not found at {source_binary}")
+        raise RuntimeError(f"Error: Binary not found at {source_spv8_binary}")
+    
+    # Only copy MKL binary if it was built (not in GitHub Actions)
+    if not is_github_actions:
+        source_mkl_binary = build_dir / "sable-mkl"
+        if source_mkl_binary.exists():
+            shutil.copy2(source_mkl_binary, SABLE_MKL_BINARY)
+            os.chmod(SABLE_MKL_BINARY, 0o755)
+            print(f"Binary copied to {SABLE_MKL_BINARY}")
+        else:
+            raise RuntimeError(f"Error: Binary not found at {source_mkl_binary}")
 
 
 @pytest.fixture(scope="session")
-def sable_binary():
-    """Fixture to ensure sable binary is built."""
+def sable_spv8_binary():
+    """Fixture to ensure sable-spv8 binary is built."""
     build_sable()
-    assert SABLE_BINARY.exists(), f"Sable binary not found at {SABLE_BINARY}"
-    return SABLE_BINARY
+    assert SABLE_SPV8_BINARY.exists(), f"Sable-spv8 binary not found at {SABLE_SPV8_BINARY}"
+    return SABLE_SPV8_BINARY
+
+
+@pytest.fixture(scope="session")
+def sable_mkl_binary():
+    """Fixture to ensure sable-mkl binary is built.
+    
+    Note: This fixture will skip if running in GitHub Actions where MKL is not available.
+    """
+    # Skip if in GitHub Actions
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        pytest.skip("MKL binary not available in GitHub Actions")
+    
+    build_sable()
+    if not SABLE_MKL_BINARY.exists():
+        pytest.skip("Sable-mkl binary not found (MKL may not be available)")
+    return SABLE_MKL_BINARY
 
 
 def compute_scipy_result(mtx_file, vector_file):
@@ -221,29 +252,65 @@ def compare_results(scipy_result, sable_result, rtol=1e-5, atol=1e-8):
     )
 
 
-def test_sable_vs_scipy_example(sable_binary):
-    """Test that sable.cpp produces the same results as scipy for example."""
+def test_sable_spv8_vs_scipy_example(sable_spv8_binary):
+    """Test that sable-spv8 produces the same results as scipy for example."""
     mtx_file = TEST_DIR / "example-canon.mtx"
     vbrc_file = TEST_DIR / "example.vbrc"
     vector_file = TEST_DIR / "generated_vector_11.vector"
     
     # Compute results
     scipy_result = compute_scipy_result(mtx_file, vector_file)
-    sable_result = compute_sable_result(sable_binary, vbrc_file, vector_file)
+    sable_result = compute_sable_result(sable_spv8_binary, vbrc_file, vector_file)
     
     # Compare results
     compare_results(scipy_result, sable_result)
 
 
-def test_sable_vs_scipy_example2(sable_binary):
-    """Test that sable.cpp produces the same results as scipy for example2."""
+def test_sable_spv8_vs_scipy_example2(sable_spv8_binary):
+    """Test that sable-spv8 produces the same results as scipy for example2."""
     mtx_file = TEST_DIR / "example-canon2.mtx"
     vbrc_file = TEST_DIR / "example2.vbrc"
     vector_file = TEST_DIR / "generated_vector_11.vector"
     
     # Compute results
     scipy_result = compute_scipy_result(mtx_file, vector_file)
-    sable_result = compute_sable_result(sable_binary, vbrc_file, vector_file)
+    sable_result = compute_sable_result(sable_spv8_binary, vbrc_file, vector_file)
+    
+    # Compare results
+    compare_results(scipy_result, sable_result)
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") == "true",
+    reason="MKL tests skipped in GitHub Actions (MKL not available)"
+)
+def test_sable_mkl_vs_scipy_example(sable_mkl_binary):
+    """Test that sable-mkl produces the same results as scipy for example."""
+    mtx_file = TEST_DIR / "example-canon.mtx"
+    vbrc_file = TEST_DIR / "example.vbrc"
+    vector_file = TEST_DIR / "generated_vector_11.vector"
+    
+    # Compute results
+    scipy_result = compute_scipy_result(mtx_file, vector_file)
+    sable_result = compute_sable_result(sable_mkl_binary, vbrc_file, vector_file)
+    
+    # Compare results
+    compare_results(scipy_result, sable_result)
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") == "true",
+    reason="MKL tests skipped in GitHub Actions (MKL not available)"
+)
+def test_sable_mkl_vs_scipy_example2(sable_mkl_binary):
+    """Test that sable-mkl produces the same results as scipy for example2."""
+    mtx_file = TEST_DIR / "example-canon2.mtx"
+    vbrc_file = TEST_DIR / "example2.vbrc"
+    vector_file = TEST_DIR / "generated_vector_11.vector"
+    
+    # Compute results
+    scipy_result = compute_scipy_result(mtx_file, vector_file)
+    sable_result = compute_sable_result(sable_mkl_binary, vbrc_file, vector_file)
     
     # Compare results
     compare_results(scipy_result, sable_result)
