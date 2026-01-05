@@ -64,6 +64,7 @@ void generate_dense_block_kernel(dyn_var<double*> y, dyn_var<double*> x,
 // Stage 2: Generate and compile specialized function for a single block
 spmv_func_t compile_single_block_spmv(const DenseBlockInfo& block, int block_idx) {
     builder_context context;
+    context.dynamic_compiler_flags = "-march=native -mavx -mprefer-vector-width=512 -ffast-math";
     
     auto ast = context.extract_function_ast(
         [&](dyn_var<double*> y, dyn_var<double*> x, dyn_var<double*> val) {
