@@ -19,9 +19,10 @@ from pathlib import Path
 TEST_DIR = pathlib.Path(__file__).parent.absolute()
 PROJECT_ROOT = TEST_DIR.parent
 
-# Add project root to path to import convert_to_vbrc
-sys.path.insert(0, str(PROJECT_ROOT))
+# Add project root to path to import from scripts
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from convert_to_vbrc import convert_yaml_to_vbrc
+from utils import build_sable_binaries
 
 SABLE_SPV8_BINARY = TEST_DIR / "sable-spv8"
 SABLE_MKL_BINARY = TEST_DIR / "sable-mkl"
@@ -33,62 +34,15 @@ def build_sable():
     Note: CMakeLists.txt handles building buildit and spv8-public dependencies.
     MKL binary is skipped in GitHub Actions where MKL is not available.
     """
-    print("Building sable binaries...")
-    
-    # Create build directory for cmake
-    build_dir = PROJECT_ROOT / "build"
-    build_dir.mkdir(exist_ok=True)
-    
-    # Configure cmake if needed
-    cmake_cache = build_dir / "CMakeCache.txt"
-    if not cmake_cache.exists():
-        print("Configuring CMake...")
-        result = subprocess.run(
-            ["cmake", ".."],
-            cwd=build_dir,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Error configuring CMake: {result.stderr}")
-    
     # Check if we're in GitHub Actions (skip MKL build if so)
     is_github_actions = os.environ.get("GITHUB_ACTIONS") == "true"
     
-    # Build sable-spv8 (always) and sable-mkl (only if not in GitHub Actions)
-    targets = ["sable-spv8"]
-    if not is_github_actions:
-        targets.append("sable-mkl")
-    
-    print(f"Compiling {' and '.join(targets)}...")
-    result = subprocess.run(
-        ["make", "-j", str(os.cpu_count() or 1)] + targets,
-        cwd=build_dir,
-        capture_output=True,
-        text=True
+    build_dir = PROJECT_ROOT / "build"
+    build_sable_binaries(
+        build_dir=build_dir,
+        skip_mkl=is_github_actions,
+        copy_to=TEST_DIR
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"Error building sable binaries: {result.stderr}")
-    
-    # Copy binaries to tests directory
-    source_spv8_binary = build_dir / "sable-spv8"
-    
-    if source_spv8_binary.exists():
-        shutil.copy2(source_spv8_binary, SABLE_SPV8_BINARY)
-        os.chmod(SABLE_SPV8_BINARY, 0o755)
-        print(f"Binary copied to {SABLE_SPV8_BINARY}")
-    else:
-        raise RuntimeError(f"Error: Binary not found at {source_spv8_binary}")
-    
-    # Only copy MKL binary if it was built (not in GitHub Actions)
-    if not is_github_actions:
-        source_mkl_binary = build_dir / "sable-mkl"
-        if source_mkl_binary.exists():
-            shutil.copy2(source_mkl_binary, SABLE_MKL_BINARY)
-            os.chmod(SABLE_MKL_BINARY, 0o755)
-            print(f"Binary copied to {SABLE_MKL_BINARY}")
-        else:
-            raise RuntimeError(f"Error: Binary not found at {source_mkl_binary}")
 
 
 @pytest.fixture(scope="session")
