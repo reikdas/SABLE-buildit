@@ -5,3 +5,6 @@
 [submodule "buildit"]
 	path = buildit
 	url = git@github.com:BuildIt-lang/buildit.git
+[submodule "find-submatrices"]
+	path = find-submatrices
+	url = git@github.com:reikdas/find-submatrices.git

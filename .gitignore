@@ -3,3 +3,5 @@ tests/sable
 tests/.pytest_cache/
 build/
 tests/__pycache__/
+tests/example2-generated.vbrc
+*/**.pyc

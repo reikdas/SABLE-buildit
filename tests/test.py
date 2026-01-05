@@ -11,16 +11,22 @@ This script:
 
 import os
 import subprocess
+import sys
 import numpy as np
 import pytest
 from scipy.io import mmread
 from scipy.sparse import csr_matrix
 import pathlib
 import shutil
+from pathlib import Path
 
 # Get the test directory and project root
 TEST_DIR = pathlib.Path(__file__).parent.absolute()
 PROJECT_ROOT = TEST_DIR.parent
+
+# Add project root to path to import convert_to_vbrc
+sys.path.insert(0, str(PROJECT_ROOT))
+from convert_to_vbrc import convert_yaml_to_vbrc
 
 SABLE_BINARY = TEST_DIR / "sable"
 
@@ -241,3 +247,90 @@ def test_sable_vs_scipy_example2(sable_binary):
     
     # Compare results
     compare_results(scipy_result, sable_result)
+
+
+def parse_vbrc_file(vbrc_path):
+    """Parse a VBRC file and return a dictionary of arrays."""
+    data = {}
+    with open(vbrc_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Parse lines like "val=[1.0,2.0,3.0]"
+            if '=' in line:
+                name, value_str = line.split('=', 1)
+                # Remove brackets and split by comma
+                value_str = value_str.strip('[]')
+                if value_str:
+                    # Parse all values as floats (VBRC format uses floats)
+                    try:
+                        values = [float(x.strip()) for x in value_str.split(',')]
+                    except ValueError:
+                        values = []
+                else:
+                    values = []
+                data[name] = values
+    return data
+
+
+def compare_vbrc_files(file1_path, file2_path):
+    """Compare two VBRC files and assert they are identical."""
+    data1 = parse_vbrc_file(file1_path)
+    data2 = parse_vbrc_file(file2_path)
+    
+    # Check that both files have the same keys
+    assert set(data1.keys()) == set(data2.keys()), \
+        f"Keys mismatch: {set(data1.keys())} vs {set(data2.keys())}"
+    
+    # Compare each array
+    for key in data1.keys():
+        arr1 = np.array(data1[key], dtype=float)
+        arr2 = np.array(data2[key], dtype=float)
+        assert len(arr1) == len(arr2), \
+            f"Length mismatch for {key}: {len(arr1)} vs {len(arr2)}"
+        
+        # Use numpy's allclose for comparison (handles both int and float values)
+        np.testing.assert_allclose(
+            arr1, arr2,
+            rtol=1e-10,
+            atol=1e-10,
+            err_msg=f"Array {key} does not match"
+        )
+
+
+def test_convert_yaml_to_vbrc_example2():
+    """Test that convert_yaml_to_vbrc generates the same VBRC file as example2.vbrc."""
+    yaml_file = TEST_DIR / "example2.yaml"
+    mtx_file = TEST_DIR / "example-canon2.mtx"
+    expected_vbrc = TEST_DIR / "example2.vbrc"
+    generated_vbrc = TEST_DIR / "example2-generated.vbrc"
+    
+    # Verify expected file exists
+    assert expected_vbrc.exists(), f"Expected VBRC file not found at {expected_vbrc}"
+    
+    # Generate VBRC file - it will create example2.vbrc in TEST_DIR
+    # Use a temporary output directory to avoid overwriting the expected file
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        convert_yaml_to_vbrc(
+            str(yaml_file),
+            str(mtx_file),
+            tmpdir
+        )
+        
+        # The generated file should be named example2.vbrc in the output directory
+        generated_in_tmp = Path(tmpdir) / "example2.vbrc"
+        assert generated_in_tmp.exists(), f"Generated VBRC file not found at {generated_in_tmp}"
+        
+        # Copy to the final location
+        if generated_vbrc.exists():
+            generated_vbrc.unlink()
+        import shutil
+        shutil.copy2(generated_in_tmp, generated_vbrc)
+    
+    # Verify the generated file exists
+    assert generated_vbrc.exists(), f"Generated VBRC file not found at {generated_vbrc}"
+    
+    # Compare the generated file with the expected file
+    compare_vbrc_files(str(expected_vbrc), str(generated_vbrc))
